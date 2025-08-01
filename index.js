@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { fetchDeviceStatus } from "./tuya.js";
 import { WebSocketServer } from "ws";
 import http from "http";
+import cors from "cors";
 
 dotenv.config();
 
