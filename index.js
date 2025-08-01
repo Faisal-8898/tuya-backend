@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 const client = new MongoClient(process.env.MONGO_URI);
 const dbName = "tuya";
 const collectionName = "device_data";
@@ -46,7 +46,6 @@ setInterval(async () => {
     };
 
     broadcast(transformed);
-    console.log("Inserted and broadcast:", transformed);
   } catch (err) {
     console.error("Polling failed:", err.message);
   }
@@ -76,10 +75,6 @@ function getValue(statusArray, code) {
   return item.value;
 }
 
-app.listen(PORT, () => {
-  console.log(`HTTP API running at http://localhost:${PORT}`);
-});
-
-server.listen(5050, () => {
-  console.log("WebSocket server on ws://localhost:5050");
+server.listen(PORT, () => {
+  console.log(`Server running (HTTP + WebSocket) on port ${PORT}`);
 });
