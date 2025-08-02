@@ -243,21 +243,23 @@ app.get("/main-chart/data", async (req, res) => {
     monthStart.setDate(monthStart.getDate() - 29);
     monthStart.setHours(0, 0, 0, 0);
 
-    // Fetch data from MongoDB
+    // Fetch data from MongoDB with limits to prevent memory issues
     const todayData = await collection.find({
       timestamp: { $gte: todayStart, $lte: todayEnd }
-    }).toArray();
+    }).limit(1000).toArray();
 
     const weekData = await collection.find({
       timestamp: { $gte: weekStart, $lte: todayEnd }
-    }).toArray();
+    }).limit(2000).toArray();
 
     const monthData = await collection.find({
       timestamp: { $gte: monthStart, $lte: todayEnd }
-    }).toArray();
+    }).limit(5000).toArray();
 
-    // Process today's data (24 hours)
+    // Process today's data (24 hours) - use latest reading for each hour
     const today = createEmptyTodayData();
+    const todayByHour = {};
+
     todayData.forEach(entry => {
       // Skip entries without valid status data
       if (!entry.status || !Array.isArray(entry.status)) {
@@ -265,18 +267,29 @@ app.get("/main-chart/data", async (req, res) => {
       }
 
       const localHour = getLocalHour(entry.timestamp);
+
+      // Keep only the latest reading for each hour
+      if (!todayByHour[localHour] || entry.timestamp > todayByHour[localHour].timestamp) {
+        todayByHour[localHour] = entry;
+      }
+    });
+
+    // Apply the latest readings to the today array
+    Object.keys(todayByHour).forEach(hour => {
+      const entry = todayByHour[hour];
       const power = getValue(entry.status, "cur_power");
       const current = getValue(entry.status, "cur_current");
       const voltage = getValue(entry.status, "cur_voltage");
 
-      today[localHour].power = power;
-      today[localHour].current = current;
-      today[localHour].voltage = voltage;
+      today[hour].power = power;
+      today[hour].current = current;
+      today[hour].voltage = voltage;
     });
 
-    // Process week's data (7 days)
+    // Process week's data (7 days) - use average of latest readings per day
     const week = createEmptyWeekData();
     const weekDataByDate = {};
+
     weekData.forEach(entry => {
       // Skip entries without valid status data
       if (!entry.status || !Array.isArray(entry.status)) {
@@ -287,11 +300,14 @@ app.get("/main-chart/data", async (req, res) => {
       if (!weekDataByDate[localDate]) {
         weekDataByDate[localDate] = [];
       }
-      weekDataByDate[localDate].push(entry);
+      // Limit entries per day to prevent memory issues
+      if (weekDataByDate[localDate].length < 100) {
+        weekDataByDate[localDate].push(entry);
+      }
     });
 
     week.forEach(day => {
-      if (weekDataByDate[day.date]) {
+      if (weekDataByDate[day.date] && weekDataByDate[day.date].length > 0) {
         const entries = weekDataByDate[day.date];
         const totalPower = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_power"), 0);
         const totalCurrent = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_current"), 0);
@@ -303,9 +319,10 @@ app.get("/main-chart/data", async (req, res) => {
       }
     });
 
-    // Process month's data (30 days)
+    // Process month's data (30 days) - use average of latest readings per day
     const month = createEmptyMonthData();
     const monthDataByDate = {};
+
     monthData.forEach(entry => {
       // Skip entries without valid status data
       if (!entry.status || !Array.isArray(entry.status)) {
@@ -316,11 +333,14 @@ app.get("/main-chart/data", async (req, res) => {
       if (!monthDataByDate[localDate]) {
         monthDataByDate[localDate] = [];
       }
-      monthDataByDate[localDate].push(entry);
+      // Limit entries per day to prevent memory issues
+      if (monthDataByDate[localDate].length < 50) {
+        monthDataByDate[localDate].push(entry);
+      }
     });
 
     month.forEach(day => {
-      if (monthDataByDate[day.date]) {
+      if (monthDataByDate[day.date] && monthDataByDate[day.date].length > 0) {
         const entries = monthDataByDate[day.date];
         const totalPower = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_power"), 0);
         const totalCurrent = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_current"), 0);
