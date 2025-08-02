@@ -32,9 +32,24 @@ function broadcast(data) {
   });
 }
 
-setInterval(async () => {
+// Polling configuration
+let pollingInterval = 2000; // Start with 2 seconds
+let consecutiveFailures = 0;
+const maxFailures = 5;
+const maxInterval = 30000; // Max 30 seconds between polls
+const maxConsecutiveFailures = 20; // Restart server after 20 consecutive failures
+let lastSuccessfulPoll = Date.now();
+
+// Improved polling function with retry logic and auto-restart
+async function pollDeviceStatus() {
   try {
     const status = await fetchDeviceStatus(deviceId);
+
+    // Reset on successful poll
+    consecutiveFailures = 0;
+    pollingInterval = 2000; // Reset to normal interval
+    lastSuccessfulPoll = Date.now();
+
     const doc = {
       timestamp: new Date(),
       status,
@@ -49,10 +64,43 @@ setInterval(async () => {
     };
 
     broadcast(transformed);
+    console.log(`✅ Polling successful at ${new Date().toISOString()}`);
+
   } catch (err) {
-    console.error("Polling failed:", err.message);
+    consecutiveFailures++;
+    console.error(`❌ Polling failed (attempt ${consecutiveFailures}):`, err.message);
+
+    // Check if we should restart the server
+    if (consecutiveFailures >= maxConsecutiveFailures) {
+      console.error(`🚨 CRITICAL: ${consecutiveFailures} consecutive failures. Restarting server in 10 seconds...`);
+
+      // Send a final error message to connected clients
+      broadcast({
+        error: "Server restarting due to API issues",
+        timestamp: new Date().toISOString()
+      });
+
+      // Wait 10 seconds then restart
+      setTimeout(() => {
+        console.error(`🔄 RESTARTING SERVER due to persistent API failures`);
+        process.exit(1); // Exit with error code to trigger restart
+      }, 20000);
+
+      return; // Stop polling
+    }
+
+    // Implement exponential backoff
+    if (consecutiveFailures >= maxFailures) {
+      pollingInterval = Math.min(pollingInterval * 2, maxInterval);
+      console.log(`⚠️  Increasing polling interval to ${pollingInterval}ms due to ${consecutiveFailures} consecutive failures`);
+    }
+
+    // Don't broadcast on failure to avoid sending stale data
   }
-}, 2000);
+}
+
+// Start polling with the improved function
+setInterval(pollDeviceStatus, 2000);
 
 app.get("/data", async (req, res) => {
   // const result = await collection
@@ -482,6 +530,44 @@ app.get("/main-chart/data", async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get("/health", (req, res) => {
+  const uptime = process.uptime();
+  const memoryUsage = process.memoryUsage();
+
+  res.json({
+    status: "healthy",
+    uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
+    memory: {
+      rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+      heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+      heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`
+    },
+    polling: {
+      consecutiveFailures,
+      lastSuccessfulPoll: new Date(lastSuccessfulPoll).toISOString(),
+      pollingInterval
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Manual restart endpoint (for emergencies)
+app.post("/restart", (req, res) => {
+  console.log("🔄 Manual restart requested");
+  res.json({
+    message: "Server restarting in 5 seconds...",
+    timestamp: new Date().toISOString()
+  });
+
+  setTimeout(() => {
+    console.log("🔄 MANUAL RESTART triggered");
+    process.exit(0);
+  }, 5000);
+});
+
 server.listen(PORT, () => {
-  console.log(`Server running (HTTP + WebSocket) on port ${PORT}`);
+  console.log(`🚀 Server running (HTTP + WebSocket) on port ${PORT}`);
+  console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔄 Manual restart: POST http://localhost:${PORT}/restart`);
 });
