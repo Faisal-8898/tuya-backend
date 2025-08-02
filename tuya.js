@@ -67,3 +67,50 @@ export async function fetchDeviceStatus(deviceId) {
 
   return res.data.result; // returns array of status
 }
+
+export async function controlDeviceSwitch(deviceId, switchState) {
+  try {
+    const token = await getAccessToken();
+    const t = Date.now().toString();
+    const method = "POST";
+    const urlPath = `/v1.0/devices/${deviceId}/commands`;
+
+    // Prepare the request body for standard device control
+    const body = JSON.stringify({
+      commands: [
+        {
+          code: "switch_1",
+          value: switchState
+        }
+      ]
+    });
+
+    console.log(`Making request to: ${BASE_URL}${urlPath}`);
+    console.log(`Request body: ${body}`);
+
+    const sign = genSignature({ method, url: urlPath, body, t, accessToken: token });
+
+    const res = await axios.post(`${BASE_URL}${urlPath}`, body, {
+      headers: {
+        client_id: TUYA_CLIENT_ID,
+        sign,
+        t,
+        sign_method: "HMAC-SHA256",
+        access_token: token,
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log(`Tuya API response status: ${res.status}`);
+    console.log(`Tuya API response data:`, JSON.stringify(res.data, null, 2));
+
+    return res.data;
+  } catch (error) {
+    console.error("Error in controlDeviceSwitch:", error.message);
+    if (error.response) {
+      console.error("Response status:", error.response.status);
+      console.error("Response data:", JSON.stringify(error.response.data, null, 2));
+    }
+    throw error;
+  }
+}
