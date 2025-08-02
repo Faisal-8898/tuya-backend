@@ -272,6 +272,10 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
 
   const result = await collection.aggregate(pipeline).toArray();
 
+  // Debug: Log the actual hours found
+  const hoursFound = result.map(h => h._id).sort((a, b) => a - b);
+  console.log(`Hours with data: ${hoursFound.join(', ')}`);
+
   // Create the 24-hour structure
   const todayData = createEmptyTodayData();
   result.forEach(hourData => {
@@ -583,6 +587,44 @@ app.get("/timezone-test", (req, res) => {
   });
 });
 
+// Database debug endpoint
+app.get("/debug-data", async (req, res) => {
+  try {
+    const timezone = getUserTimezone(req);
+    const todayStart = getTodayStartInTimezone(timezone);
+    const todayEnd = getTodayEndInTimezone(timezone);
+
+    // Get latest 10 records
+    const latestRecords = await collection
+      .find({})
+      .sort({ timestamp: -1 })
+      .limit(10)
+      .toArray();
+
+    // Get today's record count
+    const todayCount = await collection.countDocuments({
+      timestamp: { $gte: todayStart, $lte: todayEnd }
+    });
+
+    // Get total record count
+    const totalCount = await collection.countDocuments({});
+
+    res.json({
+      timezone,
+      todayStart: todayStart.toISOString(),
+      todayEnd: todayEnd.toISOString(),
+      todayRecordCount: todayCount,
+      totalRecordCount: totalCount,
+      latestRecords: latestRecords.map(r => ({
+        timestamp: r.timestamp.toISOString(),
+        status: r.status
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Manual restart endpoint (for emergencies)
 app.post("/restart", (req, res) => {
   console.log("🔄 Manual restart requested");
@@ -626,5 +668,6 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running (HTTP + WebSocket) on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🌍 Timezone test: http://localhost:${PORT}/timezone-test`);
+  console.log(`🐛 Debug data: http://localhost:${PORT}/debug-data`);
   console.log(`🔄 Manual restart: POST http://localhost:${PORT}/restart`);
 });
