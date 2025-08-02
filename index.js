@@ -209,6 +209,7 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
 
   console.log(`Today start (${timezone}): ${todayStart.toISOString()}`);
   console.log(`Today end (${timezone}): ${todayEnd.toISOString()}`);
+  console.log(`Query range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
 
   const pipeline = [
     {
@@ -225,7 +226,7 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
           hour: {
             $hour: {
               date: "$timestamp",
-              timezone: timezone
+              timezone: "Asia/Dhaka"
             }
           },
           code: "$status.code"
@@ -667,13 +668,15 @@ function getUserTimezone(req) {
 
 function getTodayStartInTimezone(timezone) {
   const now = new Date();
-  // For Asia/Dhaka (GMT+6), we need to adjust the date calculation
+  // For Asia/Dhaka (GMT+6), we need to find the UTC time that corresponds to 00:00:00 Dhaka time
   if (timezone === 'Asia/Dhaka') {
-    // Get current UTC time and add 6 hours to get Dhaka time
-    const dhakaTime = new Date(now.getTime() + (6 * 60 * 60 * 1000));
-    // Set to start of day in Dhaka timezone
-    dhakaTime.setUTCHours(0, 0, 0, 0);
-    return dhakaTime;
+    // Get current date in Dhaka timezone
+    const dhakaDate = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    // Set to start of day in Dhaka timezone (00:00:00)
+    dhakaDate.setUTCHours(0, 0, 0, 0);
+    // Convert back to UTC (subtract 6 hours)
+    const utcStart = new Date(dhakaDate.getTime() - (6 * 60 * 60 * 1000));
+    return utcStart;
   }
   // Default UTC behavior
   const localDate = new Date(now);
@@ -683,13 +686,15 @@ function getTodayStartInTimezone(timezone) {
 
 function getTodayEndInTimezone(timezone) {
   const now = new Date();
-  // For Asia/Dhaka (GMT+6), we need to adjust the date calculation
+  // For Asia/Dhaka (GMT+6), we need to find the UTC time that corresponds to 23:59:59 Dhaka time
   if (timezone === 'Asia/Dhaka') {
-    // Get current UTC time and add 6 hours to get Dhaka time
-    const dhakaTime = new Date(now.getTime() + (6 * 60 * 60 * 1000));
-    // Set to end of day in Dhaka timezone
-    dhakaTime.setUTCHours(23, 59, 59, 999);
-    return dhakaTime;
+    // Get current date in Dhaka timezone
+    const dhakaDate = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    // Set to end of day in Dhaka timezone (23:59:59)
+    dhakaDate.setUTCHours(23, 59, 59, 999);
+    // Convert back to UTC (subtract 6 hours)
+    const utcEnd = new Date(dhakaDate.getTime() - (6 * 60 * 60 * 1000));
+    return utcEnd;
   }
   // Default UTC behavior
   const localDate = new Date(now);
