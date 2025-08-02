@@ -200,13 +200,15 @@ app.get("/switch-status", async (req, res) => {
 });
 
 
-async function getTodayDataFromDB() {
+async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
   console.log("--- Running Optimized MongoDB Aggregation for Today's Data ---");
-  const today = new Date();
-  const todayStart = new Date(today);
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date(today);
-  todayEnd.setHours(23, 59, 59, 999);
+  console.log(`Using timezone: ${timezone}`);
+
+  const todayStart = getTodayStartInTimezone(timezone);
+  const todayEnd = getTodayEndInTimezone(timezone);
+
+  console.log(`Today start (${timezone}): ${todayStart.toISOString()}`);
+  console.log(`Today end (${timezone}): ${todayEnd.toISOString()}`);
 
   const pipeline = [
     {
@@ -220,7 +222,12 @@ async function getTodayDataFromDB() {
     {
       $group: {
         _id: {
-          hour: { $hour: "$timestamp" },
+          hour: {
+            $hour: {
+              date: "$timestamp",
+              timezone: timezone
+            }
+          },
           code: "$status.code"
         },
         value: { $avg: "$status.value" }
@@ -278,16 +285,19 @@ async function getTodayDataFromDB() {
   return todayData;
 }
 
-async function getWeekDataFromDB() {
+async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
   console.log("--- Running Optimized MongoDB Aggregation for Week Data ---");
+  console.log(`Using timezone: ${timezone}`);
+
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-  sevenDaysAgo.setHours(0, 0, 0, 0);
+  const localSevenDaysAgo = getDateInTimezone(sevenDaysAgo, timezone);
+  localSevenDaysAgo.setHours(0, 0, 0, 0);
 
   const pipeline = [
     {
       $match: {
-        timestamp: { $gte: sevenDaysAgo }
+        timestamp: { $gte: localSevenDaysAgo }
       }
     },
     {
@@ -296,7 +306,7 @@ async function getWeekDataFromDB() {
     {
       $group: {
         _id: {
-          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: "UTC" } },
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: timezone } },
           code: "$status.code"
         },
         value: { $avg: "$status.value" }
@@ -342,7 +352,7 @@ async function getWeekDataFromDB() {
   const result = await collection.aggregate(pipeline).toArray();
 
   // Create the 7-day structure
-  const week = createEmptyWeekData();
+  const week = createEmptyWeekData(timezone);
   result.forEach(dayData => {
     const dayIndex = week.findIndex(d => d.date === dayData._id);
     if (dayIndex !== -1) {
@@ -356,15 +366,18 @@ async function getWeekDataFromDB() {
   return week;
 }
 
-async function getMonthlyDataFromDB() {
+async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
   console.log("--- Running Optimized MongoDB Aggregation for Monthly Data ---");
+  console.log(`Using timezone: ${timezone}`);
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const localThirtyDaysAgo = getDateInTimezone(thirtyDaysAgo, timezone);
 
   const pipeline = [
     {
       $match: {
-        timestamp: { $gte: thirtyDaysAgo }
+        timestamp: { $gte: localThirtyDaysAgo }
       }
     },
     {
@@ -373,7 +386,7 @@ async function getMonthlyDataFromDB() {
     {
       $group: {
         _id: {
-          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: "UTC" } },
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: timezone } },
           code: "$status.code"
         },
         value: { $avg: "$status.value" }
@@ -419,7 +432,7 @@ async function getMonthlyDataFromDB() {
   const result = await collection.aggregate(pipeline).toArray();
 
   // Create the 30-day structure
-  const month = createEmptyMonthData();
+  const month = createEmptyMonthData(timezone);
   result.forEach(dayData => {
     const dayIndex = month.findIndex(d => d.date === dayData._id);
     if (dayIndex !== -1) {
@@ -444,12 +457,12 @@ function getValue(statusArray, code) {
   return item.value;
 }
 
-function getLocalDateString(utcDate) {
-  return new Date(utcDate).toLocaleDateString('en-CA');
+function getLocalDateString(date, timezone = 'Asia/Dhaka') {
+  return new Date(date.toLocaleString("en-US", { timeZone: timezone })).toLocaleDateString('en-CA');
 }
 
-function getLocalHour(utcDate) {
-  return new Date(utcDate).getHours();
+function getLocalHour(date, timezone = 'Asia/Dhaka') {
+  return new Date(date.toLocaleString("en-US", { timeZone: timezone })).getHours();
 }
 
 function createEmptyTodayData() {
@@ -460,15 +473,15 @@ function createEmptyTodayData() {
   return today;
 }
 
-function createEmptyWeekData() {
+function createEmptyWeekData(timezone = 'Asia/Dhaka') {
   const week = [];
   const today = new Date();
-  console.log("Creating week data for today:", getLocalDateString(today));
+  console.log("Creating week data for today:", getLocalDateString(today, timezone));
 
   for (let i = 6; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
-    const dateString = getLocalDateString(date);
+    const dateString = getLocalDateString(date, timezone);
     console.log(`Week day ${i}: ${dateString}`);
     week.push({
       date: dateString,
@@ -480,15 +493,15 @@ function createEmptyWeekData() {
   return week;
 }
 
-function createEmptyMonthData() {
+function createEmptyMonthData(timezone = 'Asia/Dhaka') {
   const month = [];
   const today = new Date();
-  console.log("Creating month data for today:", getLocalDateString(today));
+  console.log("Creating month data for today:", getLocalDateString(today, timezone));
 
   for (let i = 29; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
-    const dateString = getLocalDateString(date);
+    const dateString = getLocalDateString(date, timezone);
     if (i % 5 === 0) console.log(`Month day ${i}: ${dateString}`);
     month.push({
       date: dateString,
@@ -504,11 +517,14 @@ app.get("/main-chart/data", async (req, res) => {
   try {
     console.log("=== OPTIMIZED CHART DATA REQUEST ===");
 
+    const timezone = getUserTimezone(req);
+    console.log(`Request timezone: ${timezone}`);
+
     // Run all aggregations in parallel for maximum efficiency
     const [todayData, weekData, monthData] = await Promise.all([
-      getTodayDataFromDB(),
-      getWeekDataFromDB(),
-      getMonthlyDataFromDB()
+      getTodayDataFromDB(timezone),
+      getWeekDataFromDB(timezone),
+      getMonthlyDataFromDB(timezone)
     ]);
 
     res.json({
@@ -552,6 +568,21 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Timezone test endpoint
+app.get("/timezone-test", (req, res) => {
+  const timezone = getUserTimezone(req);
+  const now = new Date();
+
+  res.json({
+    serverTime: now.toISOString(),
+    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    requestedTimezone: timezone,
+    localTime: getDateInTimezone(now, timezone).toISOString(),
+    todayStart: getTodayStartInTimezone(timezone).toISOString(),
+    todayEnd: getTodayEndInTimezone(timezone).toISOString()
+  });
+});
+
 // Manual restart endpoint (for emergencies)
 app.post("/restart", (req, res) => {
   console.log("🔄 Manual restart requested");
@@ -566,8 +597,34 @@ app.post("/restart", (req, res) => {
   }, 5000);
 });
 
+// Timezone handling
+function getUserTimezone(req) {
+  // Try to get timezone from request headers or query params, default to GMT+6
+  const timezone = req.query.timezone || req.headers['x-timezone'] || 'Asia/Dhaka';
+  return timezone;
+}
+
+function getDateInTimezone(date, timezone) {
+  return new Date(date.toLocaleString("en-US", { timeZone: timezone }));
+}
+
+function getTodayStartInTimezone(timezone) {
+  const now = new Date();
+  const localDate = getDateInTimezone(now, timezone);
+  localDate.setHours(0, 0, 0, 0);
+  return localDate;
+}
+
+function getTodayEndInTimezone(timezone) {
+  const now = new Date();
+  const localDate = getDateInTimezone(now, timezone);
+  localDate.setHours(23, 59, 59, 999);
+  return localDate;
+}
+
 server.listen(PORT, () => {
   console.log(`🚀 Server running (HTTP + WebSocket) on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🌍 Timezone test: http://localhost:${PORT}/timezone-test`);
   console.log(`🔄 Manual restart: POST http://localhost:${PORT}/restart`);
 });
