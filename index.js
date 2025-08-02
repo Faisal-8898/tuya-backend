@@ -295,8 +295,14 @@ async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
 
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-  const localSevenDaysAgo = getDateInTimezone(sevenDaysAgo, timezone);
-  localSevenDaysAgo.setHours(0, 0, 0, 0);
+  let localSevenDaysAgo;
+  if (timezone === 'Asia/Dhaka') {
+    localSevenDaysAgo = new Date(sevenDaysAgo.getTime() + (6 * 60 * 60 * 1000));
+    localSevenDaysAgo.setUTCHours(0, 0, 0, 0);
+  } else {
+    localSevenDaysAgo = new Date(sevenDaysAgo);
+    localSevenDaysAgo.setHours(0, 0, 0, 0);
+  }
 
   const pipeline = [
     {
@@ -376,7 +382,12 @@ async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
 
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const localThirtyDaysAgo = getDateInTimezone(thirtyDaysAgo, timezone);
+  let localThirtyDaysAgo;
+  if (timezone === 'Asia/Dhaka') {
+    localThirtyDaysAgo = new Date(thirtyDaysAgo.getTime() + (6 * 60 * 60 * 1000));
+  } else {
+    localThirtyDaysAgo = new Date(thirtyDaysAgo);
+  }
 
   const pipeline = [
     {
@@ -462,11 +473,19 @@ function getValue(statusArray, code) {
 }
 
 function getLocalDateString(date, timezone = 'Asia/Dhaka') {
-  return new Date(date.toLocaleString("en-US", { timeZone: timezone })).toLocaleDateString('en-CA');
+  if (timezone === 'Asia/Dhaka') {
+    const dhakaTime = new Date(date.getTime() + (6 * 60 * 60 * 1000));
+    return dhakaTime.toISOString().split('T')[0]; // YYYY-MM-DD format
+  }
+  return date.toLocaleDateString('en-CA');
 }
 
 function getLocalHour(date, timezone = 'Asia/Dhaka') {
-  return new Date(date.toLocaleString("en-US", { timeZone: timezone })).getHours();
+  if (timezone === 'Asia/Dhaka') {
+    const dhakaTime = new Date(date.getTime() + (6 * 60 * 60 * 1000));
+    return dhakaTime.getUTCHours();
+  }
+  return date.getHours();
 }
 
 function createEmptyTodayData() {
@@ -646,20 +665,34 @@ function getUserTimezone(req) {
   return timezone;
 }
 
-function getDateInTimezone(date, timezone) {
-  return new Date(date.toLocaleString("en-US", { timeZone: timezone }));
-}
-
 function getTodayStartInTimezone(timezone) {
   const now = new Date();
-  const localDate = getDateInTimezone(now, timezone);
+  // For Asia/Dhaka (GMT+6), we need to adjust the date calculation
+  if (timezone === 'Asia/Dhaka') {
+    // Get current UTC time and add 6 hours to get Dhaka time
+    const dhakaTime = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    // Set to start of day in Dhaka timezone
+    dhakaTime.setUTCHours(0, 0, 0, 0);
+    return dhakaTime;
+  }
+  // Default UTC behavior
+  const localDate = new Date(now);
   localDate.setHours(0, 0, 0, 0);
   return localDate;
 }
 
 function getTodayEndInTimezone(timezone) {
   const now = new Date();
-  const localDate = getDateInTimezone(now, timezone);
+  // For Asia/Dhaka (GMT+6), we need to adjust the date calculation
+  if (timezone === 'Asia/Dhaka') {
+    // Get current UTC time and add 6 hours to get Dhaka time
+    const dhakaTime = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    // Set to end of day in Dhaka timezone
+    dhakaTime.setUTCHours(23, 59, 59, 999);
+    return dhakaTime;
+  }
+  // Default UTC behavior
+  const localDate = new Date(now);
   localDate.setHours(23, 59, 59, 999);
   return localDate;
 }
