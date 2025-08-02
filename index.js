@@ -151,53 +151,279 @@ app.get("/switch-status", async (req, res) => {
   }
 });
 
-// Helper function to get value from status array (keeping current in mA)
-function getValue(statusArray, code) {
-  // Check if statusArray is null, undefined, or not an array
-  if (!statusArray || !Array.isArray(statusArray)) {
-    return 0;
-  }
 
+async function getTodayDataFromDB() {
+  console.log("--- Running Optimized MongoDB Aggregation for Today's Data ---");
+  const today = new Date();
+  const todayStart = new Date(today);
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(today);
+  todayEnd.setHours(23, 59, 59, 999);
+
+  const pipeline = [
+    {
+      $match: {
+        timestamp: { $gte: todayStart, $lte: todayEnd }
+      }
+    },
+    {
+      $unwind: "$status"
+    },
+    {
+      $group: {
+        _id: {
+          hour: { $hour: "$timestamp" },
+          code: "$status.code"
+        },
+        value: { $avg: "$status.value" }
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.hour",
+        power: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_power"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        },
+        current: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_current"] },
+              "$value",
+              null
+            ]
+          }
+        },
+        voltage: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_voltage"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        }
+      }
+    },
+    {
+      $sort: { _id: 1 }
+    }
+  ];
+
+  const result = await collection.aggregate(pipeline).toArray();
+
+  // Create the 24-hour structure
+  const todayData = createEmptyTodayData();
+  result.forEach(hourData => {
+    const hour = hourData._id;
+    if (hourData.power !== null) todayData[hour].power = hourData.power;
+    if (hourData.current !== null) todayData[hour].current = hourData.current;
+    if (hourData.voltage !== null) todayData[hour].voltage = hourData.voltage;
+  });
+
+  console.log(`Today aggregation finished. Found data for ${result.length} hours.`);
+  return todayData;
+}
+
+async function getWeekDataFromDB() {
+  console.log("--- Running Optimized MongoDB Aggregation for Week Data ---");
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const pipeline = [
+    {
+      $match: {
+        timestamp: { $gte: sevenDaysAgo }
+      }
+    },
+    {
+      $unwind: "$status"
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: "UTC" } },
+          code: "$status.code"
+        },
+        value: { $avg: "$status.value" }
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.date",
+        power: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_power"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        },
+        current: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_current"] },
+              "$value",
+              null
+            ]
+          }
+        },
+        voltage: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_voltage"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        }
+      }
+    },
+    {
+      $sort: { _id: 1 }
+    }
+  ];
+
+  const result = await collection.aggregate(pipeline).toArray();
+
+  // Create the 7-day structure
+  const week = createEmptyWeekData();
+  result.forEach(dayData => {
+    const dayIndex = week.findIndex(d => d.date === dayData._id);
+    if (dayIndex !== -1) {
+      if (dayData.power !== null) week[dayIndex].power = dayData.power;
+      if (dayData.current !== null) week[dayIndex].current = dayData.current;
+      if (dayData.voltage !== null) week[dayIndex].voltage = dayData.voltage;
+    }
+  });
+
+  console.log(`Week aggregation finished. Found data for ${result.length} days.`);
+  return week;
+}
+
+async function getMonthlyDataFromDB() {
+  console.log("--- Running Optimized MongoDB Aggregation for Monthly Data ---");
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const pipeline = [
+    {
+      $match: {
+        timestamp: { $gte: thirtyDaysAgo }
+      }
+    },
+    {
+      $unwind: "$status"
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: "UTC" } },
+          code: "$status.code"
+        },
+        value: { $avg: "$status.value" }
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.date",
+        power: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_power"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        },
+        current: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_current"] },
+              "$value",
+              null
+            ]
+          }
+        },
+        voltage: {
+          $avg: {
+            $cond: [
+              { $eq: ["$_id.code", "cur_voltage"] },
+              { $divide: ["$value", 10] },
+              null
+            ]
+          }
+        }
+      }
+    },
+    {
+      $sort: { _id: 1 }
+    }
+  ];
+
+  const result = await collection.aggregate(pipeline).toArray();
+
+  // Create the 30-day structure
+  const month = createEmptyMonthData();
+  result.forEach(dayData => {
+    const dayIndex = month.findIndex(d => d.date === dayData._id);
+    if (dayIndex !== -1) {
+      if (dayData.power !== null) month[dayIndex].power = dayData.power;
+      if (dayData.current !== null) month[dayIndex].current = dayData.current;
+      if (dayData.voltage !== null) month[dayIndex].voltage = dayData.voltage;
+    }
+  });
+
+  console.log(`Month aggregation finished. Found data for ${result.length} days.`);
+  return month;
+}
+
+// Simple helper functions
+function getValue(statusArray, code) {
+  if (!statusArray || !Array.isArray(statusArray)) return 0;
   const item = statusArray.find((s) => s.code === code);
   if (!item) return 0;
-  if (code === "cur_voltage") return item.value / 10; // 2322 -> 232.2
-  if (code === "cur_power") return item.value / 10; // 7220 -> 722.0
-  return item.value; // Keep current in mA
+  if (code === "cur_voltage") return item.value / 10;
+  if (code === "cur_power") return item.value / 10;
+  if (code === "cur_current") return item.value;
+  return item.value;
 }
 
-// Helper function to convert UTC date to local date string
 function getLocalDateString(utcDate) {
-  return new Date(utcDate).toLocaleDateString('en-CA'); // YYYY-MM-DD format
+  return new Date(utcDate).toLocaleDateString('en-CA');
 }
 
-// Helper function to get local hour from UTC date
 function getLocalHour(utcDate) {
   return new Date(utcDate).getHours();
 }
 
-// Helper function to create empty data structure for today (24 hours)
 function createEmptyTodayData() {
   const today = [];
   for (let hour = 0; hour < 24; hour++) {
-    today.push({
-      hour,
-      power: 0,
-      current: 0,
-      voltage: 0
-    });
+    today.push({ hour, power: 0, current: 0, voltage: 0 });
   }
   return today;
 }
 
-// Helper function to create empty data structure for week (7 days)
 function createEmptyWeekData() {
   const week = [];
   const today = new Date();
+  console.log("Creating week data for today:", getLocalDateString(today));
+
   for (let i = 6; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
+    const dateString = getLocalDateString(date);
+    console.log(`Week day ${i}: ${dateString}`);
     week.push({
-      date: getLocalDateString(date),
+      date: dateString,
       power: 0,
       current: 0,
       voltage: 0
@@ -206,15 +432,18 @@ function createEmptyWeekData() {
   return week;
 }
 
-// Helper function to create empty data structure for month (30 days)
 function createEmptyMonthData() {
   const month = [];
   const today = new Date();
+  console.log("Creating month data for today:", getLocalDateString(today));
+
   for (let i = 29; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
+    const dateString = getLocalDateString(date);
+    if (i % 5 === 0) console.log(`Month day ${i}: ${dateString}`);
     month.push({
-      date: getLocalDateString(date),
+      date: dateString,
       power: 0,
       current: 0,
       voltage: 0
@@ -225,139 +454,21 @@ function createEmptyMonthData() {
 
 app.get("/main-chart/data", async (req, res) => {
   try {
-    const now = new Date();
+    console.log("=== OPTIMIZED CHART DATA REQUEST ===");
 
-    // Get today's data (last 24 hours)
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // Get week's data (last 7 days)
-    const weekStart = new Date(now);
-    weekStart.setDate(weekStart.getDate() - 6);
-    weekStart.setHours(0, 0, 0, 0);
-
-    // Get month's data (last 30 days)
-    const monthStart = new Date(now);
-    monthStart.setDate(monthStart.getDate() - 29);
-    monthStart.setHours(0, 0, 0, 0);
-
-    // Fetch data from MongoDB with limits to prevent memory issues
-    const todayData = await collection.find({
-      timestamp: { $gte: todayStart, $lte: todayEnd }
-    }).limit(1000).toArray();
-
-    const weekData = await collection.find({
-      timestamp: { $gte: weekStart, $lte: todayEnd }
-    }).limit(2000).toArray();
-
-    const monthData = await collection.find({
-      timestamp: { $gte: monthStart, $lte: todayEnd }
-    }).limit(5000).toArray();
-
-    // Process today's data (24 hours) - use latest reading for each hour
-    const today = createEmptyTodayData();
-    const todayByHour = {};
-
-    todayData.forEach(entry => {
-      // Skip entries without valid status data
-      if (!entry.status || !Array.isArray(entry.status)) {
-        return;
-      }
-
-      const localHour = getLocalHour(entry.timestamp);
-
-      // Keep only the latest reading for each hour
-      if (!todayByHour[localHour] || entry.timestamp > todayByHour[localHour].timestamp) {
-        todayByHour[localHour] = entry;
-      }
-    });
-
-    // Apply the latest readings to the today array
-    Object.keys(todayByHour).forEach(hour => {
-      const entry = todayByHour[hour];
-      const power = getValue(entry.status, "cur_power");
-      const current = getValue(entry.status, "cur_current");
-      const voltage = getValue(entry.status, "cur_voltage");
-
-      today[hour].power = power;
-      today[hour].current = current;
-      today[hour].voltage = voltage;
-    });
-
-    // Process week's data (7 days) - use average of latest readings per day
-    const week = createEmptyWeekData();
-    const weekDataByDate = {};
-
-    weekData.forEach(entry => {
-      // Skip entries without valid status data
-      if (!entry.status || !Array.isArray(entry.status)) {
-        return;
-      }
-
-      const localDate = getLocalDateString(entry.timestamp);
-      if (!weekDataByDate[localDate]) {
-        weekDataByDate[localDate] = [];
-      }
-      // Limit entries per day to prevent memory issues
-      if (weekDataByDate[localDate].length < 100) {
-        weekDataByDate[localDate].push(entry);
-      }
-    });
-
-    week.forEach(day => {
-      if (weekDataByDate[day.date] && weekDataByDate[day.date].length > 0) {
-        const entries = weekDataByDate[day.date];
-        const totalPower = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_power"), 0);
-        const totalCurrent = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_current"), 0);
-        const totalVoltage = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_voltage"), 0);
-
-        day.power = totalPower / entries.length;
-        day.current = totalCurrent / entries.length;
-        day.voltage = totalVoltage / entries.length;
-      }
-    });
-
-    // Process month's data (30 days) - use average of latest readings per day
-    const month = createEmptyMonthData();
-    const monthDataByDate = {};
-
-    monthData.forEach(entry => {
-      // Skip entries without valid status data
-      if (!entry.status || !Array.isArray(entry.status)) {
-        return;
-      }
-
-      const localDate = getLocalDateString(entry.timestamp);
-      if (!monthDataByDate[localDate]) {
-        monthDataByDate[localDate] = [];
-      }
-      // Limit entries per day to prevent memory issues
-      if (monthDataByDate[localDate].length < 50) {
-        monthDataByDate[localDate].push(entry);
-      }
-    });
-
-    month.forEach(day => {
-      if (monthDataByDate[day.date] && monthDataByDate[day.date].length > 0) {
-        const entries = monthDataByDate[day.date];
-        const totalPower = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_power"), 0);
-        const totalCurrent = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_current"), 0);
-        const totalVoltage = entries.reduce((sum, entry) => sum + getValue(entry.status, "cur_voltage"), 0);
-
-        day.power = totalPower / entries.length;
-        day.current = totalCurrent / entries.length;
-        day.voltage = totalVoltage / entries.length;
-      }
-    });
+    // Run all aggregations in parallel for maximum efficiency
+    const [todayData, weekData, monthData] = await Promise.all([
+      getTodayDataFromDB(),
+      getWeekDataFromDB(),
+      getMonthlyDataFromDB()
+    ]);
 
     res.json({
       success: true,
       data: {
-        today,
-        week,
-        month
+        today: todayData,
+        week: weekData,
+        month: monthData
       }
     });
 
@@ -365,7 +476,8 @@ app.get("/main-chart/data", async (req, res) => {
     console.error("Error fetching chart data:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to fetch chart data"
+      error: "Failed to fetch chart data",
+      details: error.message
     });
   }
 });
