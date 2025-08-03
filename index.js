@@ -32,23 +32,15 @@ function broadcast(data) {
   });
 }
 
-// Polling configuration
-let pollingInterval = 2000; // Start with 2 seconds
 let consecutiveFailures = 0;
-const maxFailures = 5;
-const maxInterval = 30000; // Max 30 seconds between polls
-const maxConsecutiveFailures = 20; // Restart server after 20 consecutive failures
-let lastSuccessfulPoll = Date.now();
+const maxConsecutiveFailures = 40;
 
-// Improved polling function with retry logic and auto-restart
 async function pollDeviceStatus() {
   try {
     const status = await fetchDeviceStatus(deviceId);
 
-    // Reset on successful poll
+    // On success: reset failure counter
     consecutiveFailures = 0;
-    pollingInterval = 2000; // Reset to normal interval
-    lastSuccessfulPoll = Date.now();
 
     const doc = {
       timestamp: new Date(),
@@ -65,42 +57,31 @@ async function pollDeviceStatus() {
 
     broadcast(transformed);
     console.log(`✅ Polling successful at ${new Date().toISOString()}`);
-
   } catch (err) {
     consecutiveFailures++;
-    console.error(`❌ Polling failed (attempt ${consecutiveFailures}):`, err.message);
+    console.error(`❌ Polling failed (${consecutiveFailures}):`, err.message);
 
-    // Check if we should restart the server
+    // If too many failures — trigger restart
     if (consecutiveFailures >= maxConsecutiveFailures) {
-      console.error(`🚨 CRITICAL: ${consecutiveFailures} consecutive failures. Restarting server in 10 seconds...`);
+      console.error(
+        `🚨 CRITICAL: ${consecutiveFailures} failures. Restarting server in 10 seconds...`,
+      );
 
-      // Send a final error message to connected clients
       broadcast({
-        error: "Server restarting due to API issues",
-        timestamp: new Date().toISOString()
+        error: "Server restarting due to persistent API failures",
+        timestamp: new Date().toISOString(),
       });
 
-      // Wait 10 seconds then restart
       setTimeout(() => {
-        console.error(`🔄 RESTARTING SERVER due to persistent API failures`);
-        process.exit(1); // Exit with error code to trigger restart
-      }, 20000);
-
-      return; // Stop polling
+        console.error("🔄 RESTARTING SERVER");
+        process.exit(1); // Exit with error code (handled by pm2/systemd)
+      }, 10000); // 10 seconds delay before restart
     }
-
-    // Implement exponential backoff
-    if (consecutiveFailures >= maxFailures) {
-      pollingInterval = Math.min(pollingInterval * 2, maxInterval);
-      console.log(`⚠️  Increasing polling interval to ${pollingInterval}ms due to ${consecutiveFailures} consecutive failures`);
-    }
-
-    // Don't broadcast on failure to avoid sending stale data
   }
 }
 
-// Start polling with the improved function
-setInterval(pollDeviceStatus, 2000);
+// Start fixed-interval polling
+setInterval(pollDeviceStatus, 5000);
 
 app.get("/data", async (req, res) => {
   // const result = await collection
@@ -123,10 +104,10 @@ app.post("/switch", async (req, res) => {
   try {
     const { state } = req.body; // state should be true for on, false for off
 
-    if (typeof state !== 'boolean') {
+    if (typeof state !== "boolean") {
       return res.status(400).json({
         success: false,
-        error: "Invalid state parameter. Must be true (on) or false (off)"
+        error: "Invalid state parameter. Must be true (on) or false (off)",
       });
     }
 
@@ -137,23 +118,22 @@ app.post("/switch", async (req, res) => {
     if (result && result.success !== false) {
       res.json({
         success: true,
-        message: `Device switched ${state ? 'on' : 'off'} successfully`,
-        data: result
+        message: `Device switched ${state ? "on" : "off"} successfully`,
+        data: result,
       });
     } else {
       res.status(500).json({
         success: false,
         error: "Failed to control device switch",
-        data: result
+        data: result,
       });
     }
-
   } catch (error) {
     console.error("Error controlling device switch:", error);
     res.status(500).json({
       success: false,
       error: "Failed to control device switch",
-      details: error.message
+      details: error.message,
     });
   }
 });
@@ -166,17 +146,17 @@ app.get("/switch-status", async (req, res) => {
     if (!status || !Array.isArray(status)) {
       return res.status(500).json({
         success: false,
-        error: "Invalid response from Tuya API"
+        error: "Invalid response from Tuya API",
       });
     }
 
     // Find the switch_1 status
-    const switchStatus = status.find(s => s.code === "switch_1");
+    const switchStatus = status.find((s) => s.code === "switch_1");
 
     if (!switchStatus) {
       return res.status(404).json({
         success: false,
-        error: "Switch status not found in device data"
+        error: "Switch status not found in device data",
       });
     }
 
@@ -185,22 +165,20 @@ app.get("/switch-status", async (req, res) => {
       data: {
         switch: switchStatus.value, // true for on, false for off
         timestamp: new Date().toISOString(),
-        lastUpdated: new Date().toISOString()
-      }
+        lastUpdated: new Date().toISOString(),
+      },
     });
-
   } catch (error) {
     console.error("Error fetching switch status:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch switch status from Tuya API",
-      details: error.message
+      details: error.message,
     });
   }
 });
 
-
-async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
+async function getTodayDataFromDB(timezone = "Asia/Dhaka") {
   console.log("--- Running Optimized MongoDB Aggregation for Today's Data ---");
   console.log(`Using timezone: ${timezone}`);
 
@@ -209,16 +187,18 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
 
   console.log(`Today start (${timezone}): ${todayStart.toISOString()}`);
   console.log(`Today end (${timezone}): ${todayEnd.toISOString()}`);
-  console.log(`Query range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
+  console.log(
+    `Query range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`,
+  );
 
   const pipeline = [
     {
       $match: {
-        timestamp: { $gte: todayStart, $lte: todayEnd }
-      }
+        timestamp: { $gte: todayStart, $lte: todayEnd },
+      },
     },
     {
-      $unwind: "$status"
+      $unwind: "$status",
     },
     {
       $group: {
@@ -226,13 +206,13 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
           hour: {
             $hour: {
               date: "$timestamp",
-              timezone: "Asia/Dhaka"
-            }
+              timezone: "Asia/Dhaka",
+            },
           },
-          code: "$status.code"
+          code: "$status.code",
         },
-        value: { $avg: "$status.value" }
-      }
+        value: { $avg: "$status.value" },
+      },
     },
     {
       $group: {
@@ -242,63 +222,61 @@ async function getTodayDataFromDB(timezone = 'Asia/Dhaka') {
             $cond: [
               { $eq: ["$_id.code", "cur_power"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
+              null,
+            ],
+          },
         },
         current: {
           $avg: {
-            $cond: [
-              { $eq: ["$_id.code", "cur_current"] },
-              "$value",
-              null
-            ]
-          }
+            $cond: [{ $eq: ["$_id.code", "cur_current"] }, "$value", null],
+          },
         },
         voltage: {
           $avg: {
             $cond: [
               { $eq: ["$_id.code", "cur_voltage"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
-        }
-      }
+              null,
+            ],
+          },
+        },
+      },
     },
     {
-      $sort: { _id: 1 }
-    }
+      $sort: { _id: 1 },
+    },
   ];
 
   const result = await collection.aggregate(pipeline).toArray();
 
   // Debug: Log the actual hours found
-  const hoursFound = result.map(h => h._id).sort((a, b) => a - b);
-  console.log(`Hours with data: ${hoursFound.join(', ')}`);
+  const hoursFound = result.map((h) => h._id).sort((a, b) => a - b);
+  console.log(`Hours with data: ${hoursFound.join(", ")}`);
 
   // Create the 24-hour structure
   const todayData = createEmptyTodayData();
-  result.forEach(hourData => {
+  result.forEach((hourData) => {
     const hour = hourData._id;
     if (hourData.power !== null) todayData[hour].power = hourData.power;
     if (hourData.current !== null) todayData[hour].current = hourData.current;
     if (hourData.voltage !== null) todayData[hour].voltage = hourData.voltage;
   });
 
-  console.log(`Today aggregation finished. Found data for ${result.length} hours.`);
+  console.log(
+    `Today aggregation finished. Found data for ${result.length} hours.`,
+  );
   return todayData;
 }
 
-async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
+async function getWeekDataFromDB(timezone = "Asia/Dhaka") {
   console.log("--- Running Optimized MongoDB Aggregation for Week Data ---");
   console.log(`Using timezone: ${timezone}`);
 
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
   let localSevenDaysAgo;
-  if (timezone === 'Asia/Dhaka') {
-    localSevenDaysAgo = new Date(sevenDaysAgo.getTime() + (6 * 60 * 60 * 1000));
+  if (timezone === "Asia/Dhaka") {
+    localSevenDaysAgo = new Date(sevenDaysAgo.getTime() + 6 * 60 * 60 * 1000);
     localSevenDaysAgo.setUTCHours(0, 0, 0, 0);
   } else {
     localSevenDaysAgo = new Date(sevenDaysAgo);
@@ -308,20 +286,26 @@ async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
   const pipeline = [
     {
       $match: {
-        timestamp: { $gte: localSevenDaysAgo }
-      }
+        timestamp: { $gte: localSevenDaysAgo },
+      },
     },
     {
-      $unwind: "$status"
+      $unwind: "$status",
     },
     {
       $group: {
         _id: {
-          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: timezone } },
-          code: "$status.code"
+          date: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$timestamp",
+              timezone: timezone,
+            },
+          },
+          code: "$status.code",
         },
-        value: { $avg: "$status.value" }
-      }
+        value: { $avg: "$status.value" },
+      },
     },
     {
       $group: {
@@ -331,41 +315,37 @@ async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
             $cond: [
               { $eq: ["$_id.code", "cur_power"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
+              null,
+            ],
+          },
         },
         current: {
           $avg: {
-            $cond: [
-              { $eq: ["$_id.code", "cur_current"] },
-              "$value",
-              null
-            ]
-          }
+            $cond: [{ $eq: ["$_id.code", "cur_current"] }, "$value", null],
+          },
         },
         voltage: {
           $avg: {
             $cond: [
               { $eq: ["$_id.code", "cur_voltage"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
-        }
-      }
+              null,
+            ],
+          },
+        },
+      },
     },
     {
-      $sort: { _id: 1 }
-    }
+      $sort: { _id: 1 },
+    },
   ];
 
   const result = await collection.aggregate(pipeline).toArray();
 
   // Create the 7-day structure
   const week = createEmptyWeekData(timezone);
-  result.forEach(dayData => {
-    const dayIndex = week.findIndex(d => d.date === dayData._id);
+  result.forEach((dayData) => {
+    const dayIndex = week.findIndex((d) => d.date === dayData._id);
     if (dayIndex !== -1) {
       if (dayData.power !== null) week[dayIndex].power = dayData.power;
       if (dayData.current !== null) week[dayIndex].current = dayData.current;
@@ -373,19 +353,21 @@ async function getWeekDataFromDB(timezone = 'Asia/Dhaka') {
     }
   });
 
-  console.log(`Week aggregation finished. Found data for ${result.length} days.`);
+  console.log(
+    `Week aggregation finished. Found data for ${result.length} days.`,
+  );
   return week;
 }
 
-async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
+async function getMonthlyDataFromDB(timezone = "Asia/Dhaka") {
   console.log("--- Running Optimized MongoDB Aggregation for Monthly Data ---");
   console.log(`Using timezone: ${timezone}`);
 
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   let localThirtyDaysAgo;
-  if (timezone === 'Asia/Dhaka') {
-    localThirtyDaysAgo = new Date(thirtyDaysAgo.getTime() + (6 * 60 * 60 * 1000));
+  if (timezone === "Asia/Dhaka") {
+    localThirtyDaysAgo = new Date(thirtyDaysAgo.getTime() + 6 * 60 * 60 * 1000);
   } else {
     localThirtyDaysAgo = new Date(thirtyDaysAgo);
   }
@@ -393,20 +375,26 @@ async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
   const pipeline = [
     {
       $match: {
-        timestamp: { $gte: localThirtyDaysAgo }
-      }
+        timestamp: { $gte: localThirtyDaysAgo },
+      },
     },
     {
-      $unwind: "$status"
+      $unwind: "$status",
     },
     {
       $group: {
         _id: {
-          date: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp", timezone: timezone } },
-          code: "$status.code"
+          date: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$timestamp",
+              timezone: timezone,
+            },
+          },
+          code: "$status.code",
         },
-        value: { $avg: "$status.value" }
-      }
+        value: { $avg: "$status.value" },
+      },
     },
     {
       $group: {
@@ -416,41 +404,37 @@ async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
             $cond: [
               { $eq: ["$_id.code", "cur_power"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
+              null,
+            ],
+          },
         },
         current: {
           $avg: {
-            $cond: [
-              { $eq: ["$_id.code", "cur_current"] },
-              "$value",
-              null
-            ]
-          }
+            $cond: [{ $eq: ["$_id.code", "cur_current"] }, "$value", null],
+          },
         },
         voltage: {
           $avg: {
             $cond: [
               { $eq: ["$_id.code", "cur_voltage"] },
               { $divide: ["$value", 10] },
-              null
-            ]
-          }
-        }
-      }
+              null,
+            ],
+          },
+        },
+      },
     },
     {
-      $sort: { _id: 1 }
-    }
+      $sort: { _id: 1 },
+    },
   ];
 
   const result = await collection.aggregate(pipeline).toArray();
 
   // Create the 30-day structure
   const month = createEmptyMonthData(timezone);
-  result.forEach(dayData => {
-    const dayIndex = month.findIndex(d => d.date === dayData._id);
+  result.forEach((dayData) => {
+    const dayIndex = month.findIndex((d) => d.date === dayData._id);
     if (dayIndex !== -1) {
       if (dayData.power !== null) month[dayIndex].power = dayData.power;
       if (dayData.current !== null) month[dayIndex].current = dayData.current;
@@ -458,7 +442,9 @@ async function getMonthlyDataFromDB(timezone = 'Asia/Dhaka') {
     }
   });
 
-  console.log(`Month aggregation finished. Found data for ${result.length} days.`);
+  console.log(
+    `Month aggregation finished. Found data for ${result.length} days.`,
+  );
   return month;
 }
 
@@ -473,20 +459,12 @@ function getValue(statusArray, code) {
   return item.value;
 }
 
-function getLocalDateString(date, timezone = 'Asia/Dhaka') {
-  if (timezone === 'Asia/Dhaka') {
-    const dhakaTime = new Date(date.getTime() + (6 * 60 * 60 * 1000));
-    return dhakaTime.toISOString().split('T')[0]; // YYYY-MM-DD format
+function getLocalDateString(date, timezone = "Asia/Dhaka") {
+  if (timezone === "Asia/Dhaka") {
+    const dhakaTime = new Date(date.getTime() + 6 * 60 * 60 * 1000);
+    return dhakaTime.toISOString().split("T")[0]; // YYYY-MM-DD format
   }
-  return date.toLocaleDateString('en-CA');
-}
-
-function getLocalHour(date, timezone = 'Asia/Dhaka') {
-  if (timezone === 'Asia/Dhaka') {
-    const dhakaTime = new Date(date.getTime() + (6 * 60 * 60 * 1000));
-    return dhakaTime.getUTCHours();
-  }
-  return date.getHours();
+  return date.toLocaleDateString("en-CA");
 }
 
 function createEmptyTodayData() {
@@ -497,10 +475,13 @@ function createEmptyTodayData() {
   return today;
 }
 
-function createEmptyWeekData(timezone = 'Asia/Dhaka') {
+function createEmptyWeekData(timezone = "Asia/Dhaka") {
   const week = [];
   const today = new Date();
-  console.log("Creating week data for today:", getLocalDateString(today, timezone));
+  console.log(
+    "Creating week data for today:",
+    getLocalDateString(today, timezone),
+  );
 
   for (let i = 6; i >= 0; i--) {
     const date = new Date(today);
@@ -511,16 +492,19 @@ function createEmptyWeekData(timezone = 'Asia/Dhaka') {
       date: dateString,
       power: 0,
       current: 0,
-      voltage: 0
+      voltage: 0,
     });
   }
   return week;
 }
 
-function createEmptyMonthData(timezone = 'Asia/Dhaka') {
+function createEmptyMonthData(timezone = "Asia/Dhaka") {
   const month = [];
   const today = new Date();
-  console.log("Creating month data for today:", getLocalDateString(today, timezone));
+  console.log(
+    "Creating month data for today:",
+    getLocalDateString(today, timezone),
+  );
 
   for (let i = 29; i >= 0; i--) {
     const date = new Date(today);
@@ -531,7 +515,7 @@ function createEmptyMonthData(timezone = 'Asia/Dhaka') {
       date: dateString,
       power: 0,
       current: 0,
-      voltage: 0
+      voltage: 0,
     });
   }
   return month;
@@ -548,7 +532,7 @@ app.get("/main-chart/data", async (req, res) => {
     const [todayData, weekData, monthData] = await Promise.all([
       getTodayDataFromDB(timezone),
       getWeekDataFromDB(timezone),
-      getMonthlyDataFromDB(timezone)
+      getMonthlyDataFromDB(timezone),
     ]);
 
     res.json({
@@ -556,16 +540,15 @@ app.get("/main-chart/data", async (req, res) => {
       data: {
         today: todayData,
         week: weekData,
-        month: monthData
-      }
+        month: monthData,
+      },
     });
-
   } catch (error) {
     console.error("Error fetching chart data:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch chart data",
-      details: error.message
+      details: error.message,
     });
   }
 });
@@ -581,14 +564,14 @@ app.get("/health", (req, res) => {
     memory: {
       rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
       heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
-      heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`
+      heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
     },
     polling: {
       consecutiveFailures,
       lastSuccessfulPoll: new Date(lastSuccessfulPoll).toISOString(),
-      pollingInterval
+      pollingInterval,
     },
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -603,7 +586,7 @@ app.get("/timezone-test", (req, res) => {
     requestedTimezone: timezone,
     localTime: getDateInTimezone(now, timezone).toISOString(),
     todayStart: getTodayStartInTimezone(timezone).toISOString(),
-    todayEnd: getTodayEndInTimezone(timezone).toISOString()
+    todayEnd: getTodayEndInTimezone(timezone).toISOString(),
   });
 });
 
@@ -623,7 +606,7 @@ app.get("/debug-data", async (req, res) => {
 
     // Get today's record count
     const todayCount = await collection.countDocuments({
-      timestamp: { $gte: todayStart, $lte: todayEnd }
+      timestamp: { $gte: todayStart, $lte: todayEnd },
     });
 
     // Get total record count
@@ -635,10 +618,10 @@ app.get("/debug-data", async (req, res) => {
       todayEnd: todayEnd.toISOString(),
       todayRecordCount: todayCount,
       totalRecordCount: totalCount,
-      latestRecords: latestRecords.map(r => ({
+      latestRecords: latestRecords.map((r) => ({
         timestamp: r.timestamp.toISOString(),
-        status: r.status
-      }))
+        status: r.status,
+      })),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -650,7 +633,7 @@ app.post("/restart", (req, res) => {
   console.log("🔄 Manual restart requested");
   res.json({
     message: "Server restarting in 5 seconds...",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 
   setTimeout(() => {
@@ -662,20 +645,21 @@ app.post("/restart", (req, res) => {
 // Timezone handling
 function getUserTimezone(req) {
   // Try to get timezone from request headers or query params, default to GMT+6
-  const timezone = req.query.timezone || req.headers['x-timezone'] || 'Asia/Dhaka';
+  const timezone =
+    req.query.timezone || req.headers["x-timezone"] || "Asia/Dhaka";
   return timezone;
 }
 
 function getTodayStartInTimezone(timezone) {
   const now = new Date();
   // For Asia/Dhaka (GMT+6), we need to find the UTC time that corresponds to 00:00:00 Dhaka time
-  if (timezone === 'Asia/Dhaka') {
+  if (timezone === "Asia/Dhaka") {
     // Get current date in Dhaka timezone
-    const dhakaDate = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    const dhakaDate = new Date(now.getTime() + 6 * 60 * 60 * 1000);
     // Set to start of day in Dhaka timezone (00:00:00)
     dhakaDate.setUTCHours(0, 0, 0, 0);
     // Convert back to UTC (subtract 6 hours)
-    const utcStart = new Date(dhakaDate.getTime() - (6 * 60 * 60 * 1000));
+    const utcStart = new Date(dhakaDate.getTime() - 6 * 60 * 60 * 1000);
     return utcStart;
   }
   // Default UTC behavior
@@ -687,13 +671,13 @@ function getTodayStartInTimezone(timezone) {
 function getTodayEndInTimezone(timezone) {
   const now = new Date();
   // For Asia/Dhaka (GMT+6), we need to find the UTC time that corresponds to 23:59:59 Dhaka time
-  if (timezone === 'Asia/Dhaka') {
+  if (timezone === "Asia/Dhaka") {
     // Get current date in Dhaka timezone
-    const dhakaDate = new Date(now.getTime() + (6 * 60 * 60 * 1000));
+    const dhakaDate = new Date(now.getTime() + 6 * 60 * 60 * 1000);
     // Set to end of day in Dhaka timezone (23:59:59)
     dhakaDate.setUTCHours(23, 59, 59, 999);
     // Convert back to UTC (subtract 6 hours)
-    const utcEnd = new Date(dhakaDate.getTime() - (6 * 60 * 60 * 1000));
+    const utcEnd = new Date(dhakaDate.getTime() - 6 * 60 * 60 * 1000);
     return utcEnd;
   }
   // Default UTC behavior
