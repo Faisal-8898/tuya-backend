@@ -39,7 +39,6 @@ async function pollDeviceStatus() {
   try {
     const status = await fetchDeviceStatus(deviceId);
 
-    // On success: reset failure counter
     consecutiveFailures = 0;
 
     const doc = {
@@ -82,22 +81,6 @@ async function pollDeviceStatus() {
 
 // Start fixed-interval polling
 setInterval(pollDeviceStatus, 5000);
-
-app.get("/data", async (req, res) => {
-  // const result = await collection
-  //   .find({})
-  //   .sort({ timestamp: -1 })
-  //   .limit(60)
-  //   .toArray();
-  //
-  // res.json(
-  //   result.map((entry) => ({
-  //     time: entry.timestamp.toLocaleTimeString(),
-  //     ...Object.fromEntries(entry.status.map((s) => [s.code, s.value])),
-  //   })),
-  // );
-  res.json("msg :hello");
-});
 
 // Switch control endpoint
 app.post("/switch", async (req, res) => {
@@ -553,98 +536,145 @@ app.get("/main-chart/data", async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get("/health", (req, res) => {
-  const uptime = process.uptime();
-  const memoryUsage = process.memoryUsage();
 
-  res.json({
-    status: "healthy",
-    uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
-    memory: {
-      rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
-      heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
-      heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
-    },
-    polling: {
-      consecutiveFailures,
-      lastSuccessfulPoll: new Date(lastSuccessfulPoll).toISOString(),
-      pollingInterval,
-    },
-    timestamp: new Date().toISOString(),
-  });
-});
 
-// Timezone test endpoint
-app.get("/timezone-test", (req, res) => {
-  const timezone = getUserTimezone(req);
-  const now = new Date();
-
-  res.json({
-    serverTime: now.toISOString(),
-    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    requestedTimezone: timezone,
-    localTime: getDateInTimezone(now, timezone).toISOString(),
-    todayStart: getTodayStartInTimezone(timezone).toISOString(),
-    todayEnd: getTodayEndInTimezone(timezone).toISOString(),
-  });
-});
-
-// Database debug endpoint
-app.get("/debug-data", async (req, res) => {
+app.get("/today-consumption", async (req, res) => {
   try {
+    console.log("=== TODAY'S CONSUMPTION REQUEST (ACCURATE METHOD) ===");
+
     const timezone = getUserTimezone(req);
     const todayStart = getTodayStartInTimezone(timezone);
-    const todayEnd = getTodayEndInTimezone(timezone);
+    const now = new Date();
 
-    // Get latest 10 records
-    const latestRecords = await collection
-      .find({})
-      .sort({ timestamp: -1 })
-      .limit(10)
-      .toArray();
+    console.log(`Using timezone: ${timezone}`);
+    console.log(`Today start (${timezone}): ${todayStart.toISOString()}`);
 
-    // Get today's record count
-    const todayCount = await collection.countDocuments({
-      timestamp: { $gte: todayStart, $lte: todayEnd },
-    });
+    const pipeline = [
+      // 1. Filter documents for the relevant time range and status code
+      {
+        $match: {
+          timestamp: { $gte: todayStart, $lte: now },
+          "status.code": "cur_power"
+        }
+      },
+      // 2. Unwind the status array to work with individual readings
+      {
+        $unwind: "$status"
+      },
+      // 3. Filter again to ensure we only have 'cur_power' elements
+      {
+        $match: {
+          "status.code": "cur_power"
+        }
+      },
+      // 4. Sort by time. This is CRITICAL for the next step.
+      {
+        $sort: {
+          timestamp: 1
+        }
+      },
+      // 5. Use $setWindowFields to get the previous timestamp
+      {
+        $setWindowFields: {
+          partitionBy: null, // Process all documents together
+          sortBy: { timestamp: 1 },
+          output: {
+            previousTimestamp: {
+              $shift: {
+                output: "$timestamp",
+                by: -1, // Get the value from the previous document
+                default: null // Use null for the very first document
+              }
+            }
+          }
+        }
+      },
+      // 6. Calculate the energy (kWh) for the interval since the last data point
+      {
+        $addFields: {
+          // Power in kilowatts (value/10 is Watts, then /1000 is kW)
+          powerKw: { $divide: [{ $divide: ["$status.value", 10] }, 1000] },
+          // Duration in hours
+          durationHours: {
+            // Only calculate if there was a previous timestamp
+            $ifNull: [
+              {
+                $divide: [
+                  { $subtract: ["$timestamp", "$previousTimestamp"] },
+                  3600 * 1000 // Convert milliseconds to hours
+                ]
+              },
+              0 // For the first data point, the duration is 0
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          // kwh for this specific interval
+          intervalKwh: { $multiply: ["$powerKw", "$durationHours"] }
+        }
+      },
+      // 7. Group all documents to sum up the interval kWh values
+      {
+        $group: {
+          _id: null,
+          totalKwh: { $sum: "$intervalKwh" },
+          dataPoints: { $sum: 1 }
+        }
+      }
+    ];
 
-    // Get total record count
-    const totalCount = await collection.countDocuments({});
+    const result = await collection.aggregate(pipeline).toArray();
+
+    if (result.length === 0) {
+      // Handle case with no data
+      return res.json({
+        success: true,
+        data: {
+          kwh: 0,
+          cost: 0,
+          dataPoints: 0,
+          message: "No power consumption data found for today"
+        }
+      });
+    }
+
+    const consumption = result[0];
+    const totalKwh = consumption.totalKwh;
+    const cost = totalKwh * 10; // Rate of 10 taka per unit (kWh)
+
+    console.log(`Calculated kWh: ${totalKwh.toFixed(4)}`);
+    console.log(`Calculated cost: ${cost.toFixed(2)} taka`);
+    console.log(`Based on ${consumption.dataPoints} data points.`);
 
     res.json({
-      timezone,
-      todayStart: todayStart.toISOString(),
-      todayEnd: todayEnd.toISOString(),
-      todayRecordCount: todayCount,
-      totalRecordCount: totalCount,
-      latestRecords: latestRecords.map((r) => ({
-        timestamp: r.timestamp.toISOString(),
-        status: r.status,
-      })),
+      success: true,
+      data: {
+        kwh: parseFloat(totalKwh.toFixed(4)),
+        cost: parseFloat(cost.toFixed(2)),
+        dataPoints: consumption.dataPoints,
+        timeRange: {
+          start: todayStart.toISOString(),
+          end: now.toISOString(),
+          timezone: timezone
+        },
+        rate: 10,
+        calculationMethod: "Riemann Sum of Power over Time"
+      }
     });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error calculating today's consumption:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to calculate today's consumption",
+      details: error.message
+    });
   }
 });
 
-// Manual restart endpoint (for emergencies)
-app.post("/restart", (req, res) => {
-  console.log("🔄 Manual restart requested");
-  res.json({
-    message: "Server restarting in 5 seconds...",
-    timestamp: new Date().toISOString(),
-  });
-
-  setTimeout(() => {
-    console.log("🔄 MANUAL RESTART triggered");
-    process.exit(0);
-  }, 5000);
-});
-
-// Timezone handling
 function getUserTimezone(req) {
-  // Try to get timezone from request headers or query params, default to GMT+6
   const timezone =
     req.query.timezone || req.headers["x-timezone"] || "Asia/Dhaka";
   return timezone;
@@ -688,8 +718,4 @@ function getTodayEndInTimezone(timezone) {
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running (HTTP + WebSocket) on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🌍 Timezone test: http://localhost:${PORT}/timezone-test`);
-  console.log(`🐛 Debug data: http://localhost:${PORT}/debug-data`);
-  console.log(`🔄 Manual restart: POST http://localhost:${PORT}/restart`);
 });

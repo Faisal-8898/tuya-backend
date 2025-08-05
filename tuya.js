@@ -46,7 +46,8 @@ async function getAccessToken() {
     });
 
     cachedToken = res.data.result.access_token;
-    cachedTokenExpire = now + res.data.result.expire_time - 60 * 1000; // refresh 1 min before expiry
+    cachedTokenExpire = now + (res.data.result.expire_time * 1000) - 60000;
+    // refresh 1 min before expiry
     return cachedToken;
   } catch (error) {
     console.error("Error getting access token:", error.message);
