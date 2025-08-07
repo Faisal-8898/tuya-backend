@@ -536,86 +536,104 @@ app.get("/main-chart/data", async (req, res) => {
   }
 });
 
-
-
 app.get("/today-consumption", async (req, res) => {
   try {
-    console.log("=== TODAY'S CONSUMPTION REQUEST (ACCURATE METHOD) ===");
+    console.log("=== TODAY'S CONSUMPTION REQUEST (FILTERED FOR AC ON ONLY) ===");
 
     const timezone = getUserTimezone(req);
     const todayStart = getTodayStartInTimezone(timezone);
     const now = new Date();
 
-    console.log(`Using timezone: ${timezone}`);
-    console.log(`Today start (${timezone}): ${todayStart.toISOString()}`);
-
     const pipeline = [
-      // 1. Filter documents for the relevant time range and status code
+      // 1. Only include documents for today
       {
         $match: {
-          timestamp: { $gte: todayStart, $lte: now },
-          "status.code": "cur_power"
+          timestamp: { $gte: todayStart, $lte: now }
         }
       },
-      // 2. Unwind the status array to work with individual readings
+      // 2. Unwind the status array so we can extract cur_power and switch_1
       {
         $unwind: "$status"
       },
-      // 3. Filter again to ensure we only have 'cur_power' elements
+      // 3. Filter only cur_power and switch_1 entries
       {
         $match: {
-          "status.code": "cur_power"
+          "status.code": { $in: ["cur_power", "switch_1"] }
         }
       },
-      // 4. Sort by time. This is CRITICAL for the next step.
+      // 4. Group back by _id and timestamp to merge cur_power and switch_1
+      {
+        $group: {
+          _id: "$_id",
+          timestamp: { $first: "$timestamp" },
+          values: {
+            $push: {
+              k: "$status.code",
+              v: "$status.value"
+            }
+          }
+        }
+      },
+      // 5. Convert array to object { cur_power: ..., switch_1: ... }
+      {
+        $addFields: {
+          statusObj: { $arrayToObject: "$values" }
+        }
+      },
+      // 6. Filter where switch_1 is true (AC is ON)
+      {
+        $match: {
+          "statusObj.switch_1": true,
+          "statusObj.cur_power": { $ne: null }
+        }
+      },
+      // 7. Sort by timestamp
       {
         $sort: {
           timestamp: 1
         }
       },
-      // 5. Use $setWindowFields to get the previous timestamp
+      // 8. Use $setWindowFields to get previous timestamp
       {
         $setWindowFields: {
-          partitionBy: null, // Process all documents together
           sortBy: { timestamp: 1 },
           output: {
             previousTimestamp: {
               $shift: {
                 output: "$timestamp",
-                by: -1, // Get the value from the previous document
-                default: null // Use null for the very first document
+                by: -1,
+                default: null
               }
             }
           }
         }
       },
-      // 6. Calculate the energy (kWh) for the interval since the last data point
+      // 9. Calculate duration and kWh for each interval
       {
         $addFields: {
-          // Power in kilowatts (value/10 is Watts, then /1000 is kW)
-          powerKw: { $divide: [{ $divide: ["$status.value", 10] }, 1000] },
-          // Duration in hours
+          powerKw: {
+            $divide: ["$statusObj.cur_power", 10000] // value/10 = Watts, then /1000 = kW
+          },
           durationHours: {
-            // Only calculate if there was a previous timestamp
-            $ifNull: [
+            $cond: [
+              { $and: ["$previousTimestamp", { $ne: ["$previousTimestamp", null] }] },
               {
                 $divide: [
                   { $subtract: ["$timestamp", "$previousTimestamp"] },
-                  3600 * 1000 // Convert milliseconds to hours
+                  3600000 // ms to hours
                 ]
               },
-              0 // For the first data point, the duration is 0
+              0
             ]
           }
         }
       },
       {
         $addFields: {
-          // kwh for this specific interval
           intervalKwh: { $multiply: ["$powerKw", "$durationHours"] }
         }
       },
-      // 7. Group all documents to sum up the interval kWh values
+      // 10. Sum all intervalKwh values
       {
         $group: {
           _id: null,
@@ -628,25 +646,24 @@ app.get("/today-consumption", async (req, res) => {
     const result = await collection.aggregate(pipeline).toArray();
 
     if (result.length === 0) {
-      // Handle case with no data
       return res.json({
         success: true,
         data: {
           kwh: 0,
           cost: 0,
           dataPoints: 0,
-          message: "No power consumption data found for today"
+          message: "No AC ON data found for today"
         }
       });
     }
 
     const consumption = result[0];
     const totalKwh = consumption.totalKwh;
-    const cost = totalKwh * 10; // Rate of 10 taka per unit (kWh)
+    const cost = totalKwh * 10; // 10 Taka per unit
 
     console.log(`Calculated kWh: ${totalKwh.toFixed(4)}`);
-    console.log(`Calculated cost: ${cost.toFixed(2)} taka`);
-    console.log(`Based on ${consumption.dataPoints} data points.`);
+    console.log(`Calculated cost: ${cost.toFixed(2)} Taka`);
+    console.log(`Based on ${consumption.dataPoints} ON data points.`);
 
     res.json({
       success: true,
@@ -660,7 +677,7 @@ app.get("/today-consumption", async (req, res) => {
           timezone: timezone
         },
         rate: 10,
-        calculationMethod: "Riemann Sum of Power over Time"
+        calculationMethod: "Only AC ON Intervals (Riemann Sum)"
       }
     });
 
@@ -673,6 +690,8 @@ app.get("/today-consumption", async (req, res) => {
     });
   }
 });
+
+
 
 function getUserTimezone(req) {
   const timezone =
