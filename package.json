@@ -4,7 +4,6 @@
   "author": "Faisal Ahmed",
   "description": "Tuya Dashboard Backend",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
@@ -15,9 +14,12 @@
   "dependencies": {
     "axios": "^1.11.0",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.0",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "mongodb": "^6.18.0",
+    "ngrok": "^5.0.0-beta.2",
+    "tuyapi": "github:codetheweb/tuyapi",
     "ws": "^8.18.3"
   },
   "devDependencies": {

@@ -9,7 +9,9 @@ import cors from "cors";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "*" 
+}));
 app.use(express.json()); // Add this to parse JSON request bodies
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
